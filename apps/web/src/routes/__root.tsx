@@ -51,6 +51,8 @@ import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
+import { TvModeHost } from "../components/tv/TvModeHost";
+import { useTvMode } from "../tvMode";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -153,6 +155,7 @@ function RootRouteBranch() {
   const hostedPromptLinkLanding = useHostedPromptLinkLanding(
     authGateState.status === "hosted-static",
   );
+  const { enabled: tvMode } = useTvMode();
 
   if (pathname === GUEST_PAGE_PATH) return <Outlet />;
 
@@ -201,9 +204,10 @@ function RootRouteBranch() {
   const appShell = (
     <CommandPalette>
       {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome}>
+      <AppSidebarLayout showSidebar={!isWelcome && !tvMode}>
         <Outlet />
       </AppSidebarLayout>
+      {tvMode && !isWelcome ? <TvModeHost /> : null}
     </CommandPalette>
   );
 

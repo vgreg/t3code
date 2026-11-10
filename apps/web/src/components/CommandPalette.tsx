@@ -53,10 +53,12 @@ import {
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { setTvModeEnabled, useTvMode } from "../tvMode";
 import {
   ArrowLeftIcon,
   BugIcon,
   ChartNoAxesColumnIcon,
+  TvIcon,
   CheckIcon,
   ChevronRightIcon,
   CornerLeftUpIcon,
@@ -402,6 +404,7 @@ function OpenCommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
 }) {
   const navigate = useNavigate();
+  const { enabled: tvModeEnabled } = useTvMode();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { openChildSearch, setOpen } = props;
   // Keyed by palette session: the intent and restored search only seed this
@@ -1642,6 +1645,22 @@ function OpenCommandPaletteDialog(props: {
     shortcutCommand: "usage.open",
     run: async () => {
       await navigate({ to: "/usage" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:tv-mode",
+    searchTerms: ["tv", "television", "big screen", "couch", "10-foot", "lobby", "fullscreen"],
+    title: tvModeEnabled ? "Exit TV mode" : "Enter TV mode",
+    icon: <TvIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      if (tvModeEnabled) {
+        setTvModeEnabled(false);
+        if (pathname === "/tv") await navigate({ to: "/" });
+        return;
+      }
+      await navigate({ to: "/tv" });
     },
   });
 
