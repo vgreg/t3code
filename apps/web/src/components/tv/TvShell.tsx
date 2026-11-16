@@ -34,6 +34,7 @@ import {
   type TvHubProject,
   type TvThreadStatus,
 } from "./tvHub.logic";
+import { collectTvItems, TvItemBody, TvItemRail, type TvItem } from "./TvItems";
 import { TvUsageHud } from "./TvUsageHud";
 import { TvWindow } from "./TvWindow";
 import "./tv.css";
@@ -57,6 +58,22 @@ interface HubState {
   /** The focused tile of each project, so returning to a ring lands where it was left. */
   readonly focus: Readonly<Record<string, string>>;
   readonly swing: "up" | "down" | null;
+}
+
+interface RailState {
+  readonly forKey: string;
+  readonly items: ReadonlyArray<TvItem>;
+  readonly index: number;
+  readonly open: boolean;
+}
+
+function findScrollable(root: HTMLElement): HTMLElement | null {
+  for (const element of root.querySelectorAll<HTMLElement>("*")) {
+    if (element.scrollHeight <= element.clientHeight + 1) continue;
+    const overflow = getComputedStyle(element).overflowY;
+    if (overflow === "auto" || overflow === "scroll") return element;
+  }
+  return null;
 }
 
 function pageTitle(
@@ -88,6 +105,9 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
   const nowMs = Date.parse(nowIso);
   const [hubState, setHubState] = useState<HubState>({ projectKey: null, focus: {}, swing: null });
   const [swap, setSwap] = useState<{ count: number; direction: "next" | "prev" } | null>(null);
+  const [rail, setRail] = useState<RailState | null>(null);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
   const wheelAt = useRef(0);
   // A thread refocuses its composer when it opens. After a swap the user is still browsing,
   // so that focus is declined until they press another key or click.
@@ -108,6 +128,25 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
     routeThreadKey === null
       ? null
       : (shells.find((thread) => tvThreadTileKey(thread) === routeThreadKey) ?? null);
+
+  const activeRail = !onHub && rail !== null && rail.forKey === routeThreadKey ? rail : null;
+  const activeItem = activeRail?.items[activeRail.index] ?? null;
+  const routeRoot =
+    routeThread === null
+      ? null
+      : (projects.find(
+          (entry) =>
+            entry.environmentId === routeThread.environmentId && entry.id === routeThread.projectId,
+        )?.workspaceRoot ?? null);
+  const itemThread =
+    routeTarget?.kind === "server" && routeThread !== null && routeRoot !== null
+      ? {
+          environmentId: routeThread.environmentId,
+          threadRef: routeTarget.threadRef,
+          cwd: routeThread.worktreePath ?? routeRoot,
+          workspaceRoot: routeThread.worktreePath ?? routeRoot,
+        }
+      : null;
 
   // The open thread is the hub's focus, however it was opened, so Back lands on its card.
   const routeProject =
@@ -174,6 +213,52 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
     void navigate({ to: "/" });
   };
 
+  // Tab lists what is on screen; Enter pops the picked item out into its own window.
+  const itemKey = (key: string): boolean => {
+    if (key === "Tab") {
+      const items =
+        activeRail !== null || pageRef.current === null ? [] : collectTvItems(pageRef.current);
+      setRail(
+        items.length > 0 && routeThreadKey !== null
+          ? { forKey: routeThreadKey, items, index: 0, open: false }
+          : null,
+      );
+      return true;
+    }
+    if (activeRail === null) return false;
+    const step = (delta: number) =>
+      setRail({
+        ...activeRail,
+        index: stepTvIndex(activeRail.index, delta, activeRail.items.length),
+      });
+    switch (key) {
+      case "Escape":
+        setRail(activeRail.open ? { ...activeRail, open: false } : null);
+        return true;
+      case "Enter":
+        if (activeRail.open) return false;
+        setRail({ ...activeRail, open: true });
+        return true;
+      case "ArrowUp":
+      case "ArrowDown": {
+        const delta = key === "ArrowDown" ? 1 : -1;
+        if (!activeRail.open) step(delta);
+        else {
+          const scroller = itemRef.current === null ? null : findScrollable(itemRef.current);
+          scroller?.scrollBy({ top: delta * scroller.clientHeight * 0.8, behavior: "smooth" });
+        }
+        return true;
+      }
+      case "ArrowLeft":
+      case "ArrowRight":
+        if (!activeRail.open) return false;
+        step(key === "ArrowRight" ? 1 : -1);
+        return true;
+      default:
+        return false;
+    }
+  };
+
   const hubKey = (key: string): boolean => {
     switch (key) {
       case "ArrowLeft":
@@ -233,6 +318,10 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
       return false;
     }
     const editable = isEditableFocused(event.target);
+    if (!onHub && !editable && !isAppModalPage(pathname) && itemKey(event.key)) {
+      event.preventDefault();
+      return true;
+    }
     if (!onHub && event.key === "Escape") {
       const active = document.activeElement;
       // The blur waits a task so the editor still handles this Escape itself.
@@ -362,9 +451,10 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
       </div>
 
       <div
+        ref={pageRef}
         data-tv="page"
         data-tv-move=""
-        inert={onHub}
+        inert={onHub || activeRail?.open === true}
         onPointerDownCapture={() => {
           browsing.current = false;
         }}
@@ -379,10 +469,43 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
         style={
           onHub
             ? { transform: "translateZ(-40vw) rotateX(18deg)", opacity: 0, pointerEvents: "none" }
-            : undefined
+            : activeRail?.open
+              ? { transform: "translateX(-24vw) translateZ(-52vw) rotateY(34deg)", opacity: 0.55 }
+              : undefined
         }
       >
         <TvWindow title={title}>{children}</TvWindow>
+        {activeRail !== null && !activeRail.open ? (
+          <TvItemRail
+            items={activeRail.items}
+            index={activeRail.index}
+            onPick={(index) => setRail({ ...activeRail, index, open: true })}
+          />
+        ) : null}
+      </div>
+
+      <div
+        ref={itemRef}
+        data-tv="item"
+        data-tv-move=""
+        inert={activeRail?.open !== true}
+        style={
+          activeRail?.open
+            ? { transform: "rotateY(-6deg)" }
+            : {
+                transform: "translateX(20vw) translateZ(-50vw) rotateY(-70deg)",
+                opacity: 0,
+                pointerEvents: "none",
+              }
+        }
+      >
+        {activeItem === null ? null : (
+          <TvWindow title={activeItem.label}>
+            {activeRail?.open ? (
+              <TvItemBody key={activeItem.key} item={activeItem} thread={itemThread} />
+            ) : null}
+          </TvWindow>
+        )}
       </div>
 
       {hints ? (
@@ -402,8 +525,11 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
               </>
             ) : (
               <>
-                <Hint keys="Esc">Leave the text field, then back to the hub</Hint>
+                <Hint keys="Esc">Leave the text field, then back</Hint>
                 <Hint keys="[ ]">Previous or next thread</Hint>
+                <Hint keys="Tab">Tables, images and PDFs on screen</Hint>
+                <Hint keys="↑ ↓ Enter">Pick and open one</Hint>
+                <Hint keys="← →">Next item</Hint>
               </>
             )}
           </div>
