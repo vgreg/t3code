@@ -56,17 +56,27 @@ export function selectTvThreads(
 
 export const TV_NEW_THREAD_TILE = "new-thread";
 
-export interface TvHubProject {
+export type TvGrouping = "project" | "status";
+
+/** One ring of the hub: a project's threads, or every thread in one state. */
+export interface TvHubGroup {
   readonly key: string;
-  readonly ref: ScopedProjectRef;
   readonly title: string;
+  /** The project a new thread starts in; null for a status ring. */
+  readonly ref: ScopedProjectRef | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
-  /** Ring order: the new-thread tile, then one tile per thread. */
+  /** Ring order: the new-thread tile for a project, then one tile per thread. */
   readonly tiles: ReadonlyArray<string>;
 }
 
 export function tvThreadTileKey(thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) {
   return scopedThreadKey({ environmentId: thread.environmentId, threadId: thread.id });
+}
+
+export function tvThreadProjectKey(
+  thread: Pick<EnvironmentThreadShell, "environmentId" | "projectId">,
+) {
+  return scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
 }
 
 /**
@@ -80,10 +90,10 @@ export function buildTvHub(
     readonly title: string;
   }>,
   threads: ReadonlyArray<EnvironmentThreadShell>,
-): TvHubProject[] {
+): TvHubGroup[] {
   const threadsByProject = new Map<string, EnvironmentThreadShell[]>();
   for (const thread of threads) {
-    const key = scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
+    const key = tvThreadProjectKey(thread);
     const group = threadsByProject.get(key);
     if (group) group.push(thread);
     else threadsByProject.set(key, [thread]);
@@ -113,10 +123,46 @@ export function buildTvHub(
     .map(({ project }) => project);
 }
 
+const STATUS_GROUPS = [
+  { id: "pinned", title: "Pinned" },
+  { id: "waiting", title: "Waiting on you" },
+  { id: "failed", title: "Failed" },
+  { id: "working", title: "Working" },
+  { id: "idle", title: "Idle" },
+] as const;
+
+function tvStatusGroupId(thread: EnvironmentThreadShell): (typeof STATUS_GROUPS)[number]["id"] {
+  if (thread.pinnedAt !== null) return "pinned";
+  const status = tvThreadStatus(thread);
+  return status === "approval" || status === "input" ? "waiting" : status;
+}
+
+/** One ring per state, empty ones left out. A pinned thread is only in the Pinned ring. */
+export function buildTvStatusHub(threads: ReadonlyArray<EnvironmentThreadShell>): TvHubGroup[] {
+  return STATUS_GROUPS.map(({ id, title }) => {
+    const members = threads.filter((thread) => tvStatusGroupId(thread) === id);
+    return {
+      key: `status:${id}`,
+      title,
+      ref: null,
+      threads: members,
+      tiles: members.map(tvThreadTileKey),
+    };
+  }).filter((group) => group.threads.length > 0);
+}
+
 /** Index of the remembered tile, or the first thread (the new-thread tile when there is none). */
 export function resolveTvFocus(tiles: ReadonlyArray<string>, remembered: string | undefined) {
   const index = remembered === undefined ? -1 : tiles.indexOf(remembered);
-  return index !== -1 ? index : Math.min(1, tiles.length - 1);
+  if (index !== -1) return index;
+  return tiles[0] === TV_NEW_THREAD_TILE ? Math.min(1, tiles.length - 1) : 0;
+}
+
+/** Threads present now that were not in `previous`: the cards that play their arrival. */
+export function tvArrivals(previous: ReadonlyArray<string> | null, current: ReadonlyArray<string>) {
+  if (previous === null) return [];
+  const known = new Set(previous);
+  return current.filter((key) => !known.has(key));
 }
 
 export function stepTvIndex(index: number, delta: number, count: number) {

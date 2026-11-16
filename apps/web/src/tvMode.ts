@@ -11,6 +11,7 @@ const TvModeStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   scale: Schema.Finite,
   hints: Schema.optional(Schema.Boolean),
+  grouping: Schema.optional(Schema.Literals(["project", "status"])),
 });
 export type TvModeState = typeof TvModeStateSchema.Type;
 
@@ -88,6 +89,11 @@ export function stepTvScale(direction: 1 | -1) {
 export function toggleTvHints() {
   const current = currentState();
   setState({ ...current, hints: current.hints !== true });
+}
+
+export function toggleTvGrouping() {
+  const current = currentState();
+  setState({ ...current, grouping: current.grouping === "status" ? "project" : "status" });
 }
 
 export function toggleFullscreen() {

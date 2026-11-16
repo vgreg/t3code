@@ -5,7 +5,7 @@
   --tv-rim: color-mix(in oklab, var(--primary) 70%, var(--foreground));
   --tv-glass: color-mix(in oklab, var(--background) 82%, var(--primary));
   --tv-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --tv-top: 6rem;
+  --tv-top: 7.25rem;
   --tv-bottom: 1.75rem;
   position: fixed;
   inset: 0;
@@ -113,24 +113,21 @@
   transform-style: preserve-3d;
 }
 
-[data-tv="ring-swing"] {
+/* One ring per group, stacked in a column; moving between groups slides the column. */
+[data-tv="ring-row"] {
+  position: absolute;
   transform-style: preserve-3d;
-}
-
-[data-tv="ring-swing"][data-swing="up"] {
-  animation: tv-swing-up 0.45s var(--tv-ease);
-}
-
-[data-tv="ring-swing"][data-swing="down"] {
-  animation: tv-swing-down 0.45s var(--tv-ease);
+  transition-duration: 0.6s, 0.4s;
 }
 
 [data-tv="slot"] {
+  --tv-card-h: min(31vw, 62vh);
   position: absolute;
-  width: 27vw;
-  height: 15.5vw;
-  margin: -7.75vw 0 0 -13.5vw;
-  -webkit-box-reflect: below 0.5vw linear-gradient(transparent 62%, rgb(0 0 0 / 0.22));
+  width: 25vw;
+  height: var(--tv-card-h);
+  margin: calc(var(--tv-card-h) / -2) 0 0 -12.5vw;
+  transform-style: preserve-3d;
+  -webkit-box-reflect: below 0.5vw linear-gradient(transparent 78%, rgb(0 0 0 / 0.2));
 }
 
 [data-tv="card"] {
@@ -157,27 +154,71 @@
 [data-tv="card"] [data-tv="win-body"] {
   display: flex;
   flex-direction: column;
-  gap: 0.45vw;
-  padding: 1.5vw 1.6vw 1.2vw;
+  gap: 0.7vw;
+  padding: 1.6vw 1.6vw 1.4vw;
+}
+
+[data-tv="card-project"] {
+  padding-bottom: 0.9vw;
+  border-bottom: 0.1vw solid color-mix(in oklab, var(--tv-rim) 45%, transparent);
+  font-weight: 600;
+  font-size: 1.25vw;
 }
 
 [data-tv="card-title"] {
   display: -webkit-box;
   overflow: hidden;
   font-weight: 650;
-  font-size: 1.75vw;
+  font-size: 1.9vw;
   line-height: 1.2;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 5;
 }
 
 [data-tv="card-meta"] {
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2vw;
   margin-top: auto;
   color: var(--muted-foreground);
   font-size: 1.1vw;
+}
+
+[data-tv="card-meta"] > * {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+[data-tv="card-meta"] > b {
+  color: var(--tv-rim);
+}
+
+[data-tv="project-name"] {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+[data-tv="project-name"] > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Card actions. Each plays once; the thread changes when it ends. */
+[data-tv="card"][data-arrived] {
+  animation: tv-card-arrive 0.6s var(--tv-ease);
+}
+[data-tv="card"][data-fx="hop"] {
+  animation: tv-fx-hop 0.5s var(--tv-ease);
+}
+[data-tv="card"][data-fx="lift"] {
+  animation: tv-fx-lift 0.45s ease-in forwards;
+}
+[data-tv="card"][data-fx="drop"] {
+  animation: tv-fx-drop 0.45s ease-in forwards;
 }
 
 [data-tv="pip"] {
@@ -236,6 +277,10 @@
   animation: tv-swing-prev-b 0.45s var(--tv-ease);
 }
 
+[data-tv="page"][data-spawn] {
+  animation: tv-spawn 0.6s var(--tv-ease);
+}
+
 [data-tv="page"] [data-tv="win"],
 [data-tv="page"] [data-tv="win-body"] > * {
   height: 100%;
@@ -290,16 +335,17 @@
 }
 
 [data-tv="where"] > b {
-  overflow: hidden;
   font-weight: 700;
   font-size: 1.6rem;
   letter-spacing: -0.01em;
   line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-[data-tv="where"] > span {
+[data-tv="where"] > span,
+[data-tv="where-step"] {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
   color: var(--muted-foreground);
   font-size: 0.8rem;
 }
@@ -366,13 +412,14 @@
   background: color-mix(in oklab, var(--primary) 18%, transparent);
 }
 
+/* An open item sits centered, in front of its thread. */
 [data-tv="item"] {
   position: absolute;
-  top: calc(var(--tv-top) + 2rem);
-  right: 4vw;
+  top: var(--tv-top);
+  right: 9vw;
   bottom: var(--tv-bottom);
+  left: 9vw;
   z-index: 4;
-  width: 56vw;
 }
 
 [data-tv="item"] [data-tv="win"] {
@@ -463,18 +510,6 @@
 }
 
 /* Two names per direction so a repeat swap restarts the animation without a remount. */
-@keyframes tv-swing-up {
-  from {
-    transform: rotateX(-70deg);
-    opacity: 0;
-  }
-}
-@keyframes tv-swing-down {
-  from {
-    transform: rotateX(70deg);
-    opacity: 0;
-  }
-}
 @keyframes tv-swing-next-a {
   from {
     transform: rotateY(70deg);
@@ -500,12 +535,50 @@
   }
 }
 
+@keyframes tv-spawn {
+  from {
+    transform: translateZ(-70vw) rotateY(-150deg) scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+}
+@keyframes tv-card-arrive {
+  from {
+    transform: translateZ(-30vw) rotateY(120deg) scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes tv-fx-hop {
+  45% {
+    transform: translateY(-3.5vw) translateZ(6vw) rotateX(10deg);
+    filter: brightness(1.5);
+  }
+}
+@keyframes tv-fx-lift {
+  to {
+    transform: translateY(-34vw) rotateX(35deg) scale(0.7);
+    opacity: 0;
+  }
+}
+@keyframes tv-fx-drop {
+  to {
+    transform: translateY(26vw) rotateX(-55deg) scale(0.7);
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   [data-tv-move] {
     transition: none;
   }
-  [data-tv="ring-swing"],
-  [data-tv="page"] {
+  [data-tv="page"],
+  [data-tv="card"][data-arrived] {
     animation: none !important;
+  }
+  /* Kept, but instant: the action runs when the animation ends. */
+  [data-tv="card"][data-fx] {
+    animation-duration: 1ms;
   }
 }
