@@ -1,11 +1,22 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import {
+  scopeProjectRef,
+  scopeThreadRef,
+  scopedProjectKey,
+  scopedThreadKey,
+} from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useNowMinute } from "../../hooks/useNowMinute";
+import { useThreadActions } from "../../hooks/useThreadActions";
 import { useThreadRouteTarget } from "../../hooks/useThreadRouteTarget";
 import { isEditableFocused } from "../../lib/editableFocus";
 import { registerCommands } from "../../shortcuts/dispatcher";
@@ -16,22 +27,28 @@ import {
   setTvModeEnabled,
   stepTvScale,
   toggleFullscreen,
+  toggleTvGrouping,
   toggleTvHints,
   useTvMode,
 } from "../../tvMode";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import { isAppModalPage } from "../sidebar/mainAppLocation";
 import { Kbd } from "../ui/kbd";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   buildTvHub,
+  buildTvStatusHub,
   resolveTvFocus,
   selectTvThreads,
   stepTvIndex,
   TV_NEW_THREAD_TILE,
+  tvArrivals,
   tvRingSlot,
+  tvThreadProjectKey,
   tvThreadStatus,
   tvThreadTileKey,
-  type TvHubProject,
+  type TvHubGroup,
   type TvThreadStatus,
 } from "./tvHub.logic";
 import { collectTvItems, TvItemBody, TvItemRail, type TvItem } from "./TvItems";
@@ -41,6 +58,8 @@ import "./tv.css";
 
 const TV_HUB_PATH = "/tv";
 const RING_RADIUS_VW = 62;
+// Far enough that the rings above and below the current one sit off screen.
+const RING_ROW_GAP_VW = 72;
 const WHEEL_STEP_MS = 180;
 const OPEN_LAYER_SELECTOR =
   '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
@@ -54,10 +73,24 @@ const STATUS_LABEL: Record<TvThreadStatus, string> = {
 };
 
 interface HubState {
-  readonly projectKey: string | null;
-  /** The focused tile of each project, so returning to a ring lands where it was left. */
+  readonly groupKey: string | null;
+  /** The focused tile of each ring, so returning to one lands where it was left. */
   readonly focus: Readonly<Record<string, string>>;
-  readonly swing: "up" | "down" | null;
+}
+
+/** A card playing out an action: `hop` stays in its ring, `lift` and `drop` leave it. */
+interface CardFx {
+  readonly key: string;
+  readonly kind: "hop" | "lift" | "drop";
+  readonly action: "pin" | "unpin" | "settle";
+  readonly sent: boolean;
+}
+
+interface SeenThreads {
+  readonly signature: string | null;
+  readonly keys: ReadonlyArray<string> | null;
+  /** Threads that appeared since the last change; their cards play an arrival. */
+  readonly fresh: ReadonlyArray<string>;
 }
 
 interface RailState {
@@ -98,12 +131,15 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
   const pathname = useLocation({ select: (location) => location.pathname });
   const routeTarget = useThreadRouteTarget();
   const handleNewThread = useNewThreadHandler();
-  const { hints } = useTvMode();
+  const { hints, grouping: storedGrouping } = useTvMode();
+  const { pinThread, unpinThread, settleThread } = useThreadActions();
   const shells = useVisibleThreadShells();
   const projects = useProjects();
   const nowIso = useNowMinute();
   const nowMs = Date.parse(nowIso);
-  const [hubState, setHubState] = useState<HubState>({ projectKey: null, focus: {}, swing: null });
+  const [hubState, setHubState] = useState<HubState>({ groupKey: null, focus: {} });
+  const [seen, setSeen] = useState<SeenThreads>({ signature: null, keys: null, fresh: [] });
+  const [fx, setFx] = useState<CardFx | null>(null);
   const [swap, setSwap] = useState<{ count: number; direction: "next" | "prev" } | null>(null);
   const [rail, setRail] = useState<RailState | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
@@ -113,14 +149,43 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
   // so that focus is declined until they press another key or click.
   const browsing = useRef(false);
 
-  const hub = buildTvHub(
+  const threads = selectTvThreads(shells, nowIso);
+  const projectHub = buildTvHub(
     sortScopedProjectsForSidebar(
       projects.filter((project) => project.archivedAt == null),
       shells,
       "updated_at",
     ),
-    selectTvThreads(shells, nowIso),
+    threads,
   );
+  const statusHub = buildTvStatusHub(threads);
+  // With no live thread there is no status ring to show, so the projects stay up.
+  const grouping = storedGrouping === "status" && statusHub.length > 0 ? "status" : "project";
+  const hub = grouping === "status" ? statusHub : projectHub;
+  const projectByKey = new Map(
+    projects.map((entry) => [
+      scopedProjectKey(scopeProjectRef(entry.environmentId, entry.id)),
+      entry,
+    ]),
+  );
+  const projectOf = (thread: EnvironmentThreadShell) =>
+    projectByKey.get(tvThreadProjectKey(thread)) ?? null;
+
+  const threadKeys = threads.map(tvThreadTileKey);
+  const signature = threadKeys.toSorted().join("\n");
+  if (seen.signature !== signature) {
+    setSeen({ signature, keys: threadKeys, fresh: tvArrivals(seen.keys, threadKeys) });
+  }
+  // A card that left its ring stays hidden until the thread's new state arrives.
+  const fxThread =
+    fx === null ? null : (threads.find((thread) => tvThreadTileKey(thread) === fx.key) ?? null);
+  if (
+    fx !== null &&
+    fx.sent &&
+    (fxThread === null || (fxThread.pinnedAt !== null) === (fx.action === "pin"))
+  ) {
+    setFx(null);
+  }
   const onHub = pathname === TV_HUB_PATH;
   const routeThreadKey =
     routeTarget?.kind === "server" ? scopedThreadKey(routeTarget.threadRef) : null;
@@ -133,13 +198,8 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
   const ringInFront = onHub || isAppModalPage(pathname);
   const activeRail = !onHub && rail !== null && rail.forKey === routeThreadKey ? rail : null;
   const activeItem = activeRail?.items[activeRail.index] ?? null;
-  const routeRoot =
-    routeThread === null
-      ? null
-      : (projects.find(
-          (entry) =>
-            entry.environmentId === routeThread.environmentId && entry.id === routeThread.projectId,
-        )?.workspaceRoot ?? null);
+  const routeProject = routeThread === null ? null : projectOf(routeThread);
+  const routeRoot = routeProject?.workspaceRoot ?? null;
   const itemThread =
     routeTarget?.kind === "server" && routeThread !== null && routeRoot !== null
       ? {
@@ -151,38 +211,103 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
       : null;
 
   // The open thread is the hub's focus, however it was opened, so Back lands on its card.
-  const routeProject =
+  const routeGroup =
     routeThreadKey === null ? null : hub.find((entry) => entry.tiles.includes(routeThreadKey));
   if (
-    routeProject &&
+    routeGroup &&
     routeThreadKey !== null &&
-    (hubState.projectKey !== routeProject.key ||
-      hubState.focus[routeProject.key] !== routeThreadKey)
+    (hubState.groupKey !== routeGroup.key || hubState.focus[routeGroup.key] !== routeThreadKey)
   ) {
     setHubState({
-      projectKey: routeProject.key,
-      focus: { ...hubState.focus, [routeProject.key]: routeThreadKey },
-      swing: null,
+      groupKey: routeGroup.key,
+      focus: { ...hubState.focus, [routeGroup.key]: routeThreadKey },
     });
   }
 
-  const projectIndex = Math.max(
+  const groupIndex = Math.max(
     0,
-    hub.findIndex((entry) => entry.key === hubState.projectKey),
+    hub.findIndex((entry) => entry.key === hubState.groupKey),
   );
-  const project: TvHubProject | null = hub[projectIndex] ?? null;
-  const tiles = project?.tiles ?? [];
-  const focusIndex = project === null ? 0 : resolveTvFocus(tiles, hubState.focus[project.key]);
+  const group: TvHubGroup | null = hub[groupIndex] ?? null;
+  const tiles = group?.tiles ?? [];
+  const focusOf = (entry: TvHubGroup) => resolveTvFocus(entry.tiles, hubState.focus[entry.key]);
+  const focusIndex = group === null ? 0 : focusOf(group);
+  const threadAt = (entry: TvHubGroup, index: number) =>
+    entry.threads.find((thread) => tvThreadTileKey(thread) === entry.tiles[index]) ?? null;
+  const focusedThread = group === null ? null : threadAt(group, focusIndex);
+  // A new thread starts in the ring's project, or in the focused thread's on a status ring.
+  const startRef =
+    group?.ref ??
+    (focusedThread === null
+      ? null
+      : scopeProjectRef(focusedThread.environmentId, focusedThread.projectId));
 
+  const settleArrivals = () => {
+    if (seen.fresh.length > 0) setSeen({ ...seen, fresh: [] });
+  };
   const moveFocus = (delta: number) => {
     const tile = tiles[stepTvIndex(focusIndex, delta, tiles.length)];
-    if (project === null || tile === undefined) return;
-    setHubState({ ...hubState, focus: { ...hubState.focus, [project.key]: tile } });
+    if (group === null || tile === undefined) return;
+    settleArrivals();
+    setHubState({ ...hubState, focus: { ...hubState.focus, [group.key]: tile } });
   };
-  const moveProject = (delta: number) => {
-    const next = hub[stepTvIndex(projectIndex, delta, hub.length)];
-    if (next === undefined || next.key === project?.key) return;
-    setHubState({ ...hubState, projectKey: next.key, swing: delta > 0 ? "down" : "up" });
+  const moveGroup = (delta: number) => {
+    const next = hub[stepTvIndex(groupIndex, delta, hub.length)];
+    if (next === undefined || next.key === group?.key) return;
+    settleArrivals();
+    setHubState({ ...hubState, groupKey: next.key });
+  };
+  // The focused thread stays focused in the other grouping.
+  const switchGrouping = () => {
+    const other = grouping === "status" ? projectHub : statusHub;
+    const tile = focusedThread === null ? null : tvThreadTileKey(focusedThread);
+    const target = tile === null ? undefined : other.find((entry) => entry.tiles.includes(tile));
+    toggleTvGrouping();
+    setHubState(
+      target === undefined || tile === null
+        ? { ...hubState, groupKey: null }
+        : { groupKey: target.key, focus: { ...hubState.focus, [target.key]: tile } },
+    );
+  };
+  const startFx = (action: "pin" | "settle") => {
+    if (focusedThread === null || fx !== null) return;
+    const pinned = focusedThread.pinnedAt !== null;
+    const leaves = action === "settle" || grouping === "status";
+    setFx({
+      key: tvThreadTileKey(focusedThread),
+      kind: !leaves ? "hop" : action === "settle" || pinned ? "drop" : "lift",
+      action: action === "settle" ? "settle" : pinned ? "unpin" : "pin",
+      sent: false,
+    });
+  };
+  // The animation plays first, so the card is seen leaving before the thread moves.
+  const finishFx = async () => {
+    if (fx === null || fx.sent || fxThread === null || group === null) return;
+    const ref = scopeThreadRef(fxThread.environmentId, fxThread.id);
+    const neighbor = tiles[focusIndex + 1] ?? tiles[focusIndex - 1];
+    if (fx.kind === "hop") setFx(null);
+    else {
+      setFx({ ...fx, sent: true });
+      if (neighbor !== undefined) {
+        setHubState({ ...hubState, focus: { ...hubState.focus, [group.key]: neighbor } });
+      }
+    }
+    const result = await (fx.action === "settle"
+      ? settleThread(ref)
+      : fx.action === "pin"
+        ? pinThread(ref)
+        : unpinThread(ref));
+    if (result._tag !== "Failure") return;
+    setFx(null);
+    if (isAtomCommandInterrupted(result)) return;
+    const error = squashAtomCommandFailure(result);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: `Could not ${fx.action} the thread`,
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
   };
   const openThread = (thread: EnvironmentThreadShell) =>
     void navigate({
@@ -190,19 +315,17 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
       params: buildThreadRouteParams({ environmentId: thread.environmentId, threadId: thread.id }),
     });
   const startThread = () => {
-    if (project !== null) void handleNewThread(project.ref);
+    if (startRef !== null) void handleNewThread(startRef);
   };
   const openTile = (index: number) => {
-    const thread = project?.threads[index - 1];
+    const thread = group === null ? null : threadAt(group, index);
     if (thread) openThread(thread);
     else if (tiles[index] === TV_NEW_THREAD_TILE) startThread();
   };
   const swapThread = (delta: 1 | -1) => {
-    if (project === null) return false;
-    const current = project.threads.findIndex(
-      (thread) => tvThreadTileKey(thread) === routeThreadKey,
-    );
-    const next = project.threads[current + delta];
+    if (group === null) return false;
+    const current = group.threads.findIndex((thread) => tvThreadTileKey(thread) === routeThreadKey);
+    const next = group.threads[current + delta];
     if (next === undefined) return false;
     setSwap({ count: (swap?.count ?? 0) + 1, direction: delta === 1 ? "next" : "prev" });
     browsing.current = true;
@@ -270,13 +393,25 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
         moveFocus(1);
         return true;
       case "ArrowUp":
-        moveProject(-1);
+        moveGroup(-1);
         return true;
       case "ArrowDown":
-        moveProject(1);
+        moveGroup(1);
         return true;
       case "Enter":
         openTile(focusIndex);
+        return true;
+      case "g":
+      case "G":
+        switchGrouping();
+        return true;
+      case "p":
+      case "P":
+        startFx("pin");
+        return true;
+      case "s":
+      case "S":
+        startFx("settle");
         return true;
       case "n":
       case "N":
@@ -361,21 +496,48 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
   }, []);
 
   const title = pageTitle(pathname, routeTarget, routeThread);
-  const position = project === null ? null : `Project ${projectIndex + 1} of ${hub.length}`;
+  // In a thread the corner names its project; on the hub it names the ring.
+  const groupProject = group?.ref ? (projectByKey.get(group.key) ?? null) : null;
+  const startProject =
+    startRef === null ? null : (projectByKey.get(scopedProjectKey(startRef)) ?? null);
+  const whereProject = onHub ? groupProject : (routeProject ?? startProject);
+  const whereTitle = onHub ? (group?.title ?? "T3 Code") : (whereProject?.title ?? "T3 Code");
+  const position =
+    group === null
+      ? null
+      : `${grouping === "status" ? "Status" : "Project"} ${groupIndex + 1} of ${hub.length}`;
+  const above = hub[groupIndex - 1];
+  const below = hub[groupIndex + 1];
 
   return (
     <div data-tv="stage" data-hints={hints ? "" : undefined}>
       <div data-tv="hud" data-edge="top">
-        <button
-          type="button"
-          data-tv="where"
-          onClick={toHub}
-          aria-label="Back to the hub"
-          disabled={onHub}
-        >
-          <b>{project?.title ?? "T3 Code"}</b>
-          <span>{onHub ? position : (routeThread?.branch ?? position)}</span>
-        </button>
+        {onHub ? (
+          <div data-tv="where">
+            {above ? (
+              <button type="button" data-tv="where-step" onClick={() => moveGroup(-1)}>
+                ▲ <ProjectName project={projectByKey.get(above.key) ?? null} title={above.title} />
+              </button>
+            ) : null}
+            <b>
+              <ProjectName project={whereProject} title={whereTitle} />
+            </b>
+            {below ? (
+              <button type="button" data-tv="where-step" onClick={() => moveGroup(1)}>
+                ▼ <ProjectName project={projectByKey.get(below.key) ?? null} title={below.title} />
+              </button>
+            ) : (
+              <span>{position}</span>
+            )}
+          </div>
+        ) : (
+          <button type="button" data-tv="where" onClick={toHub} aria-label="Back to the hub">
+            <b>
+              <ProjectName project={whereProject} title={whereTitle} />
+            </b>
+            <span>{routeThread?.branch ?? "Back to the hub"}</span>
+          </button>
+        )}
         <TvUsageHud />
       </div>
 
@@ -397,59 +559,92 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
           moveFocus(delta > 0 ? 1 : -1);
         }}
       >
-        {project === null ? null : (
-          <div key={project.key} data-tv="ring-swing" data-swing={hubState.swing ?? undefined}>
-            {tiles.map((tile, index) => {
-              const slot = tvRingSlot(index - focusIndex);
-              if (slot === null) return null;
-              const thread = project.threads[index - 1];
-              const focused = index === focusIndex;
-              return (
-                <div
-                  key={tile}
-                  data-tv="slot"
-                  data-tv-move=""
-                  style={{
-                    transform: `rotateY(${slot.angle}deg) translateZ(${RING_RADIUS_VW}vw)`,
-                    opacity: slot.opacity,
-                  }}
-                >
-                  <button
-                    type="button"
-                    data-tv="card"
-                    data-focused={focused ? "" : undefined}
-                    tabIndex={focused ? 0 : -1}
-                    onClick={() => (focused ? openTile(index) : moveFocus(index - focusIndex))}
+        {/* Every ring is stacked in one column; only the current one and its neighbours mount. */}
+        {hub.map((entry, row) => {
+          const offset = row - groupIndex;
+          if (Math.abs(offset) > 1) return null;
+          const rowFocus = focusOf(entry);
+          const entryProject = entry.ref ? (projectByKey.get(entry.key) ?? null) : null;
+          return (
+            <div
+              key={entry.key}
+              data-tv="ring-row"
+              data-tv-move=""
+              inert={offset !== 0}
+              style={{ transform: `translateY(${offset * RING_ROW_GAP_VW}vw)` }}
+            >
+              {entry.tiles.map((tile, index) => {
+                const slot = tvRingSlot(index - rowFocus);
+                if (slot === null) return null;
+                const thread = threadAt(entry, index);
+                const focused = offset === 0 && index === rowFocus;
+                const cardFx = fx?.key === tile ? fx.kind : undefined;
+                return (
+                  <div
+                    key={tile}
+                    data-tv="slot"
+                    data-tv-move=""
+                    style={{
+                      transform: `rotateY(${slot.angle}deg) translateZ(${RING_RADIUS_VW}vw)`,
+                      opacity: slot.opacity,
+                    }}
                   >
-                    <TvWindow>
-                      {thread ? (
-                        <>
-                          <span data-tv="pip" data-status={tvThreadStatus(thread)}>
-                            {STATUS_LABEL[tvThreadStatus(thread)]}
-                          </span>
-                          <span data-tv="card-title">{thread.title}</span>
-                          <span data-tv="card-meta">
-                            {[thread.branch, formatRelativeTimeLabel(thread.updatedAt, nowMs)]
-                              .filter(Boolean)
-                              .join(", ")}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span data-tv="pip" data-status="new">
-                            New thread
-                          </span>
-                          <span data-tv="card-title">Start a thread in {project.title}</span>
-                          <span data-tv="card-meta">Speak or type the prompt next</span>
-                        </>
-                      )}
-                    </TvWindow>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                    <button
+                      type="button"
+                      data-tv="card"
+                      data-focused={focused ? "" : undefined}
+                      data-fx={cardFx}
+                      data-arrived={seen.fresh.includes(tile) ? "" : undefined}
+                      tabIndex={focused ? 0 : -1}
+                      onClick={() => (focused ? openTile(index) : moveFocus(index - rowFocus))}
+                      onAnimationEnd={(event) => {
+                        if (cardFx !== undefined && event.animationName.startsWith("tv-fx-")) {
+                          void finishFx();
+                        }
+                      }}
+                    >
+                      <TvWindow>
+                        {thread ? (
+                          <>
+                            <span data-tv="card-project">
+                              <ProjectName
+                                project={projectOf(thread)}
+                                title={projectOf(thread)?.title ?? "Project"}
+                              />
+                            </span>
+                            <span data-tv="pip" data-status={tvThreadStatus(thread)}>
+                              {STATUS_LABEL[tvThreadStatus(thread)]}
+                            </span>
+                            <span data-tv="card-title">{thread.title}</span>
+                            <span data-tv="card-meta">
+                              {thread.pinnedAt === null ? null : <b>Pinned</b>}
+                              {thread.branch ? <span>{thread.branch}</span> : null}
+                              <span>{thread.modelSelection.model}</span>
+                              <span>{formatRelativeTimeLabel(thread.updatedAt, nowMs)}</span>
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span data-tv="card-project">
+                              <ProjectName project={entryProject} title={entry.title} />
+                            </span>
+                            <span data-tv="pip" data-status="new">
+                              New thread
+                            </span>
+                            <span data-tv="card-title">Start a thread here</span>
+                            <span data-tv="card-meta">
+                              <span>Speak or type the prompt next</span>
+                            </span>
+                          </>
+                        )}
+                      </TvWindow>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
       </div>
 
       <div
@@ -468,11 +663,12 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
         data-swing={
           swap === null ? undefined : `${swap.direction}-${swap.count % 2 === 0 ? "a" : "b"}`
         }
+        data-spawn={routeTarget?.kind === "draft" ? "" : undefined}
         style={
           ringInFront
             ? { transform: "translateZ(-40vw) rotateX(18deg)", opacity: 0, pointerEvents: "none" }
             : activeRail?.open
-              ? { transform: "translateX(-24vw) translateZ(-52vw) rotateY(34deg)", opacity: 0.55 }
+              ? { transform: "translateZ(-45vw)", opacity: 0.35 }
               : undefined
         }
       >
@@ -493,9 +689,9 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
         inert={activeRail?.open !== true}
         style={
           activeRail?.open
-            ? { transform: "rotateY(-6deg)" }
+            ? undefined
             : {
-                transform: "translateX(20vw) translateZ(-50vw) rotateY(-70deg)",
+                transform: "translateY(18vw) translateZ(-60vw) rotateX(-35deg)",
                 opacity: 0,
                 pointerEvents: "none",
               }
@@ -516,9 +712,12 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
             {onHub ? (
               <>
                 <Hint keys="← →">Threads</Hint>
-                <Hint keys="↑ ↓">Projects</Hint>
+                <Hint keys="↑ ↓">{grouping === "status" ? "Statuses" : "Projects"}</Hint>
                 <Hint keys="Enter">Open</Hint>
+                <Hint keys="G">{grouping === "status" ? "By project" : "By status"}</Hint>
                 <Hint keys="N">New thread</Hint>
+                <Hint keys="P">Pin</Hint>
+                <Hint keys="S">Settle</Hint>
                 <Hint keys="U">Usage</Hint>
                 <Hint keys="+ −">Text size</Hint>
                 <Hint keys="F">Full screen</Hint>
@@ -546,6 +745,22 @@ function Hint({ keys, children }: { readonly keys: string; readonly children: Re
     <span>
       <Kbd variant="outline">{keys}</Kbd>
       {children}
+    </span>
+  );
+}
+
+/** A project's name with its icon; a status ring has a name and no project. */
+function ProjectName({
+  project,
+  title,
+}: {
+  readonly project: EnvironmentProject | null;
+  readonly title: string;
+}) {
+  return (
+    <span data-tv="project-name">
+      {project === null ? null : <ProjectFavicon project={project} className="size-[1em]" />}
+      <span>{title}</span>
     </span>
   );
 }

@@ -3,10 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildTvHub,
+  buildTvStatusHub,
   resolveTvFocus,
   selectTvThreads,
   stepTvIndex,
   TV_NEW_THREAD_TILE,
+  tvArrivals,
   tvGauge,
   tvRingSlot,
   tvThreadStatus,
@@ -30,6 +32,7 @@ function shell(
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     pendingSubagentRequest: null,
+    pinnedAt: null,
     runtime: null,
     latestRun: null,
     ...overrides,
@@ -102,6 +105,30 @@ describe("buildTvHub", () => {
   });
 });
 
+describe("buildTvStatusHub", () => {
+  it("makes one ring per state in use, with a pinned thread only in Pinned", () => {
+    const hub = buildTvStatusHub([
+      shell("asks", { hasPendingUserInput: true }),
+      shell("approve", { hasPendingApprovals: true }),
+      shell("busy", { runtime: running }),
+      shell("kept", { runtime: running, pinnedAt: NOW }),
+    ]);
+    expect(hub.map((group) => [group.title, group.threads.map((thread) => thread.id)])).toEqual([
+      ["Pinned", ["kept"]],
+      ["Waiting on you", ["asks", "approve"]],
+      ["Working", ["busy"]],
+    ]);
+    expect(hub[0]?.tiles).not.toContain(TV_NEW_THREAD_TILE);
+  });
+});
+
+describe("tvArrivals", () => {
+  it("reports threads that were not there before, and none on the first look", () => {
+    expect(tvArrivals(null, ["a"])).toEqual([]);
+    expect(tvArrivals(["a"], ["b", "a", "c"])).toEqual(["b", "c"]);
+  });
+});
+
 describe("resolveTvFocus", () => {
   const tiles = [TV_NEW_THREAD_TILE, "t1", "t2"];
 
@@ -115,6 +142,10 @@ describe("resolveTvFocus", () => {
 
   it("lands on the new-thread tile in a project with no threads", () => {
     expect(resolveTvFocus([TV_NEW_THREAD_TILE], "gone")).toBe(0);
+  });
+
+  it("lands on the first thread of a status ring, which has no new-thread tile", () => {
+    expect(resolveTvFocus(["t1", "t2"], undefined)).toBe(0);
   });
 });
 

@@ -12,21 +12,28 @@ Press `Q` in the hub, or choose **Exit TV mode** in the command palette, to retu
 
 ## The hub
 
-The hub shows one project at a time as a ring of its active threads. Threads waiting on you (approvals, questions, failures) come first, and the project with the most urgent thread is shown first. Your remaining subscription limits are in the top right corner.
+The hub shows one ring of thread cards at a time. Rings are stacked: by project to begin with, or by status (Pinned, Waiting on you, Failed, Working, Idle) after you press `G`. Threads waiting on you come first, and the project with the most urgent thread is shown first. The top left corner names the current ring and the ones above and below it. Your remaining subscription limits are in the top right corner.
 
-| Key       | In the hub                          |
-| --------- | ----------------------------------- |
-| `←` `→`   | Move between threads                |
-| `↑` `↓`   | Move between projects               |
-| `Enter`   | Open the thread                     |
-| `N`       | Start a thread in the project shown |
-| `U`       | Open Usage                          |
-| `H`       | Show or hide the key hints          |
-| `+` / `-` | Make everything larger or smaller   |
-| `F`       | Toggle full screen                  |
-| `Q`       | Exit TV mode                        |
+| Key       | In the hub                                       |
+| --------- | ------------------------------------------------ |
+| `←` `→`   | Move between threads                             |
+| `↑` `↓`   | Move to the ring above or below                  |
+| `Enter`   | Open the thread                                  |
+| `G`       | Switch between grouping by project and by status |
+| `N`       | Start a thread                                   |
+| `P`       | Pin or unpin the thread                          |
+| `S`       | Settle the thread                                |
+| `U`       | Open Usage                                       |
+| `H`       | Show or hide the key hints                       |
+| `+` / `-` | Make everything larger or smaller                |
+| `F`       | Toggle full screen                               |
+| `Q`       | Exit TV mode                                     |
 
-With a mouse, click a card to select it and click it again to open it. The scroll wheel moves between threads.
+In a project ring, `N` starts the thread in that project. In a status ring, it starts it in the project of the selected thread.
+
+Settling or unpinning shows an **Undo** notice. A settled thread leaves the hub; find it again in the normal layout.
+
+With a mouse, click a card to select it and click it again to open it. The scroll wheel moves between threads, and the names in the top left corner move between rings.
 
 ## In a thread
 
@@ -34,11 +41,11 @@ A thread opens in a window with the normal conversation and composer, so message
 
 Navigation keys only act while you are not in a text field, so dictated text is never read as a command. `Escape` leaves the text field, and anything you type afterward still goes to the composer.
 
-| Key      | In a thread, outside a text field                       |
-| -------- | ------------------------------------------------------- |
-| `Escape` | Return to the hub                                       |
-| `[` `]`  | Swap to the previous or next thread of the same project |
-| `Tab`    | List the tables, images, and PDFs on screen             |
+| Key      | In a thread, outside a text field                    |
+| -------- | ---------------------------------------------------- |
+| `Escape` | Return to the hub                                    |
+| `[` `]`  | Swap to the previous or next thread of the same ring |
+| `Tab`    | List the tables, images, and PDFs on screen          |
 
 Click the project name in the top left corner to return to the hub with a mouse.
 
@@ -49,10 +56,10 @@ Press `Tab` to list the tables, images, and PDF links currently on screen in the
 | Key      | With the list open                                  |
 | -------- | --------------------------------------------------- |
 | `↑` `↓`  | Pick an item, or scroll the item once it is open    |
-| `Enter`  | Open the item in its own window                     |
+| `Enter`  | Open the item in front of the thread                |
 | `←` `→`  | Move to the previous or next item while one is open |
 | `Escape` | Close the item, then the list                       |
 
 ## Using a gamepad
 
-TV mode does not read a controller itself. Use a mapping app to send keys: the D-pad as the arrow keys, and buttons for `Enter`, `Escape`, `Tab`, `[`, `]`, `N`, `U`, and `H`. That set reaches every part of TV mode.
+TV mode does not read a controller itself. Use a mapping app to send keys: the D-pad as the arrow keys, and buttons for `Enter`, `Escape`, `Tab`, `[`, `]`, `N`, and `G`. That set reaches every thread and item. `P`, `S`, `U`, and `H` are worth a button if you have spares.
