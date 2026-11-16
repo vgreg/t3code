@@ -129,6 +129,8 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
       ? null
       : (shells.find((thread) => tvThreadTileKey(thread) === routeThreadKey) ?? null);
 
+  // Settings and Usage open as the app's own dialogs, so the hub stays in view behind them.
+  const ringInFront = onHub || isAppModalPage(pathname);
   const activeRail = !onHub && rail !== null && rail.forKey === routeThreadKey ? rail : null;
   const activeItem = activeRail?.items[activeRail.index] ?? null;
   const routeRoot =
@@ -382,10 +384,10 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
         data-tv-move=""
         inert={!onHub}
         style={{
-          transform: onHub
+          transform: ringInFront
             ? `translateZ(${-RING_RADIUS_VW}vw)`
             : `translateZ(${-RING_RADIUS_VW - 60}vw) translateY(-10vw)`,
-          opacity: onHub ? 1 : 0.12,
+          opacity: ringInFront ? 1 : 0.12,
         }}
         onWheel={(event) => {
           const delta =
@@ -467,7 +469,7 @@ export function TvShell({ children }: { readonly children: ReactNode }) {
           swap === null ? undefined : `${swap.direction}-${swap.count % 2 === 0 ? "a" : "b"}`
         }
         style={
-          onHub
+          ringInFront
             ? { transform: "translateZ(-40vw) rotateX(18deg)", opacity: 0, pointerEvents: "none" }
             : activeRail?.open
               ? { transform: "translateX(-24vw) translateZ(-52vw) rotateY(34deg)", opacity: 0.55 }
