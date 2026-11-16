@@ -10,6 +10,7 @@ const TV_MODE_STORAGE_KEY = "t3code:tv-mode:v1";
 const TvModeStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   scale: Schema.Finite,
+  hints: Schema.optional(Schema.Boolean),
 });
 export type TvModeState = typeof TvModeStateSchema.Type;
 
@@ -82,6 +83,11 @@ export function stepTvScale(direction: 1 | -1) {
   const from = index === -1 ? TV_SCALES.length - 1 : index;
   const to = Math.max(0, Math.min(TV_SCALES.length - 1, from + direction));
   setState({ ...current, scale: TV_SCALES[to] ?? DEFAULT_TV_SCALE });
+}
+
+export function toggleTvHints() {
+  const current = currentState();
+  setState({ ...current, hints: current.hints !== true });
 }
 
 export function toggleFullscreen() {
