@@ -50,7 +50,7 @@ import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { GUEST_PAGE_PATH } from "../guestPage";
-import { TvModeHost } from "../components/tv/TvModeHost";
+import { TvShell } from "../components/tv/TvShell";
 import { useTvMode } from "../tvMode";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
@@ -204,11 +204,18 @@ function RootRouteBranch() {
   );
   const appShell = (
     <CommandPalette>
-      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
-      <AppSidebarLayout showSidebar={!isWelcome && !tvMode}>
-        <Outlet />
-      </AppSidebarLayout>
-      {tvMode && !isWelcome ? <TvModeHost /> : null}
+      {tvMode && !isWelcome ? (
+        <TvShell>
+          <AppSidebarLayout showSidebar={false}>
+            <Outlet />
+          </AppSidebarLayout>
+        </TvShell>
+      ) : (
+        // Setup starts with an empty workspace, so the Welcome page has no thread list.
+        <AppSidebarLayout showSidebar={!isWelcome}>
+          <Outlet />
+        </AppSidebarLayout>
+      )}
     </CommandPalette>
   );
 
